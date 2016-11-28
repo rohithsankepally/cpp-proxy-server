@@ -2,16 +2,17 @@
 #include <sys/types.h>        /*  socket types              */
 #include <arpa/inet.h>        /*  inet (3) funtions         */
 #include <unistd.h>           /*  misc. UNIX functions      */
-
-#include "helper.h"           /*  our own helper functions  */
+#include <netinet/in.h>
+#include <netdb.h>
 
 #include <stdlib.h>
-#include <iostream>
 #include <string.h>
+#include <iostream>
 #include <sstream>
 #include <vector>
 #include <pthread.h>
 
+#include "helper.h"           /*  our own helper functions  */
 using namespace std;
 
 #define DEF_PORT          (2007)
@@ -36,6 +37,86 @@ vector<string> split_string(string str, char delimiter) {
   return internal;
 }
 
+bool fetchServerName(string request, string& ip) {
+	int posn = request.find("Host: ");
+	if(posn != string::npos) {
+		posn += 6;
+		while(request[posn] != '\r') {
+			ip += request[posn];
+			posn++;
+		}
+		return true;
+	}
+	else
+		return false;
+}
+
+bool fetchUrlData(string request, string& response) {
+	struct sockaddr_in servaddr;
+	int serverSock, status = 0;
+	string serverName = "";
+	unsigned short serverPort = 80;
+	struct hostent* server = NULL;
+	unsigned long serverIP;
+	memset(&servaddr, 0, sizeof(servaddr));
+	/*
+	A socket to get response from the server
+	*/
+	serverSock = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+	
+	/*
+	Fetch the server IP from the request
+	*/
+	if(!fetchServerName(request, serverName)) {
+		cerr << "Unable to fetch server's name" << endl;
+		return false;
+	}
+	cout << "Server Name: " << serverName;
+	//cout << " @ " << endl;
+	//serverName = "www.google.com";
+	server = gethostbyname(serverName.c_str());
+	if (server == NULL) {
+    	cerr << "Unable to resolve server's IP Address. Exiting..." << endl;
+    	return false;
+  	}
+	
+	
+  	char *tmpIP = inet_ntoa(*(struct in_addr *)server->h_addr_list[0]);
+	cout << "Server IP: " << tmpIP << endl;
+	status = inet_pton(AF_INET, tmpIP, (void*) &serverIP);
+  	if (status <= 0) return false;
+  	status = 0;
+  	//cout << "Server IP: " << serverIP << endl;
+	/*
+	Populate the server address and the port 
+	*/
+	servaddr.sin_family      = AF_INET;
+	servaddr.sin_addr.s_addr = inet_addr(tmpIP);
+	servaddr.sin_port        = htons(serverPort);
+
+	/*
+	Connect to the server IP
+	*/
+	status = connect(serverSock, (struct sockaddr *) &servaddr, sizeof(servaddr));
+  	if (status < 0) {
+    	cerr << "Error opening host connection." << endl;
+    	return false;
+  	}
+  	SendMessage(serverSock, request, request.size());
+
+  	ReadMessage(serverSock, response, MAX_LINE);
+
+  	if ( close(serverSock) < 0 ) {
+		cerr << "PROXY-SERVER: Error calling close()" << endl;
+		exit(EXIT_FAILURE);
+	}
+	else {
+		cout << "Closed connection with server successfully !!!!" << endl;
+	}
+
+  	return true;
+}
+
 void* clientThread(void* args_p){
 
   // Local Variables
@@ -58,6 +139,14 @@ void* clientThread(void* args_p){
 	if(request_params.size() > 0) {
 
 		cout << "Fetching data....." << endl;
+
+		string response;
+		if(!fetchUrlData(request, response)) {
+			cerr << "Error fetching data from URL! " << endl;
+			//return;
+		}
+		cout << response << endl;
+		/*
 		stringstream ss;
 		ss << "HTTP/1.0 200 OK\n";
       	ss << "Date: " << ctime(&rawtime);
@@ -71,12 +160,16 @@ void* clientThread(void* args_p){
       	ss << "</html>";
 		cout << "Sending message......" << endl;
 		cout << ss.str() << endl;
+		*/
+
+
 		try {
-			sent_msg_size = SendMessage(conn_s, ss.str(), ss.str().size());	
+			sent_msg_size = SendMessage(conn_s, response, response.size());	
 			cout << "> " << sent_msg_size << endl;
 		} catch( ... ) {
 			cerr << "Browser Closed Connection! " << endl;
 		}
+
 	}
 
 	/*  Close the connected socket  */
@@ -87,7 +180,7 @@ void* clientThread(void* args_p){
 		exit(EXIT_FAILURE);
 	}
 	else {
-		cout << "Closed connection successfully !!!!" << endl;
+		cout << "Closed connection with proxy server successfully !!!!" << endl;;
 	}
 
   // Quit thread
