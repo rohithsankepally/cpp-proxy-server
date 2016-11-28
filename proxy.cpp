@@ -42,6 +42,8 @@ bool fetchServerName(string request, string& ip) {
 	if(posn != string::npos) {
 		posn += 6;
 		while(request[posn] != '\r') {
+			if(request[posn] == ':')
+				break;
 			ip += request[posn];
 			posn++;
 		}
@@ -72,7 +74,7 @@ bool fetchUrlData(string request, string& response) {
 		return false;
 	}
 	cout << "Server Name: " << serverName;
-	//cout << " @ " << endl;
+	cout << " @ ";
 	//serverName = "www.google.com";
 	server = gethostbyname(serverName.c_str());
 	if (server == NULL) {
@@ -82,7 +84,7 @@ bool fetchUrlData(string request, string& response) {
 	
 	
   	char *tmpIP = inet_ntoa(*(struct in_addr *)server->h_addr_list[0]);
-	cout << "Server IP: " << tmpIP << endl;
+	cout  << tmpIP << endl;
 	status = inet_pton(AF_INET, tmpIP, (void*) &serverIP);
   	if (status <= 0) return false;
   	status = 0;
@@ -91,7 +93,7 @@ bool fetchUrlData(string request, string& response) {
 	Populate the server address and the port 
 	*/
 	servaddr.sin_family      = AF_INET;
-	servaddr.sin_addr.s_addr = inet_addr(tmpIP);
+	servaddr.sin_addr.s_addr = serverIP;
 	servaddr.sin_port        = htons(serverPort);
 
 	/*
@@ -104,7 +106,7 @@ bool fetchUrlData(string request, string& response) {
   	}
   	SendMessage(serverSock, request, request.size());
 
-  	ReadMessage(serverSock, response, MAX_LINE);
+  	ReadMessage(serverSock, response, MAX_LINE, true);
 
   	if ( close(serverSock) < 0 ) {
 		cerr << "PROXY-SERVER: Error calling close()" << endl;
@@ -132,7 +134,7 @@ void* clientThread(void* args_p){
 	string request;
 	/*  Retrieve an input line from the connected socket
 	    then simply write it back to the same socket.     */
-	ReadMessage(conn_s, request, MAX_LINE-1);
+	ReadMessage(conn_s, request, MAX_LINE-1, false);
 	
 	cout << "Browser Message: " << endl << request << endl;
 	request_params = split_string(request, ' ');
@@ -145,7 +147,7 @@ void* clientThread(void* args_p){
 			cerr << "Error fetching data from URL! " << endl;
 			//return;
 		}
-		cout << response << endl;
+		//cout << response << endl;
 		/*
 		stringstream ss;
 		ss << "HTTP/1.0 200 OK\n";

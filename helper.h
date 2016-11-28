@@ -11,7 +11,7 @@ using namespace std;
 
 /*  Function declarations  */
 
-ssize_t ReadMessage(int fd, string &inp, size_t maxlen);
+ssize_t ReadMessage(int fd, string &inp, size_t maxlen, bool isServer);
 ssize_t SendMessage(int fc, string msg, size_t maxlen);
 
 

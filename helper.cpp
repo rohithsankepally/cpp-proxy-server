@@ -11,7 +11,7 @@
 using namespace std;
 /*  Read a line from a socket  */
 
-ssize_t ReadMessage(int sockd, string &message, size_t maxlen) {
+ssize_t ReadMessage(int sockd, string &message, size_t maxlen, bool isServer) {
 	// Local Variables
 	stringstream ss;
 	int bufferSize = 1000; 
@@ -44,7 +44,7 @@ ssize_t ReadMessage(int sockd, string &message, size_t maxlen) {
 				ss << buffPTR[i];
 			}
 			
-			if (totalSize > 4){
+			if (totalSize > 4 && !isServer){
 				
 				string tmpMsg = ss.str();
 				if (tmpMsg[tmpMsg.length()-4] == '\r'
