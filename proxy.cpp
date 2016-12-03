@@ -4,7 +4,7 @@
 #include <unistd.h>           /*  misc. UNIX functions      */
 #include <netinet/in.h>
 #include <netdb.h>
-
+//#include <mutex>
 #include <stdlib.h>
 #include <string.h>
 #include <iostream>
@@ -13,31 +13,35 @@
 #include <pthread.h>
 
 #include "helper.h"           /*  our own helper functions  */
+#include "cache.hpp"          /*  LRU cache                 */
 using namespace std;
 
 #define DEF_PORT          (2007)
 
 #define MAX_LINE           (1000)
 const int MAXPENDING = 25;
-
+pthread_mutex_t cacheLock;
+Cache<string, string, time_t> cache(1000);
 struct threadArgs {
 	int clientSock;
 };
 
 
 vector<string> split_string(string str, char delimiter) {
-	vector<string> internal;
+  vector<string> internal;
   stringstream ss(str); // Turn the string into a stream.
   string tok;
   
   while(getline(ss, tok, delimiter)) {
-  	internal.push_back(tok);
-  }
-  
-  return internal;
+	internal.push_back(tok);
 }
 
-bool fetchServerName(string request, string& ip) {
+return internal;
+}
+
+
+
+bool getServerName(string request, string& ip) {
 	int posn = request.find("Host: ");
 	if(posn != string::npos) {
 		posn += 6;
@@ -51,6 +55,36 @@ bool fetchServerName(string request, string& ip) {
 	}
 	else
 		return false;
+}
+
+bool getRequestType(string request, string& rtype) {
+	int posn = request.find(" ");
+	if(posn != string::npos) {
+		rtype.append(request, 0, posn);
+		return true;
+	}
+	else
+		return false;
+}
+
+bool getURL(string request, string& url) {
+	if (request.find("https://") != string::npos) {
+	   url.append(request,
+			request.find("GET https://") + 12,
+			request.find(" HTTP/1.0") - (request.find("GET https://") + 12));
+	   	return true;
+   } else if (request.find("http://") != string::npos) {
+		url.append(request,
+			request.find("GET http://") + 11,
+			request.find(" HTTP/1.0") - (request.find("GET http://") + 11));
+		return true;
+} else {
+	url.append(request,
+		request.find("GET ") + 4,
+		request.find(" HTTP/1.0") - (request.find("GET ") + 4));
+	return true;
+}
+return false;
 }
 
 bool fetchUrlData(string request, string& response) {
@@ -69,7 +103,7 @@ bool fetchUrlData(string request, string& response) {
 	/*
 	Fetch the server IP from the request
 	*/
-	if(!fetchServerName(request, serverName)) {
+	if(!getServerName(request, serverName)) {
 		cerr << "Unable to fetch server's name" << endl;
 		return false;
 	}
@@ -78,17 +112,17 @@ bool fetchUrlData(string request, string& response) {
 	//serverName = "www.google.com";
 	server = gethostbyname(serverName.c_str());
 	if (server == NULL) {
-    	cerr << "Unable to resolve server's IP Address. Exiting..." << endl;
-    	return false;
-  	}
+		cerr << "Unable to resolve server's IP Address. Exiting..." << endl;
+		return false;
+	}
 	
 	
-  	char *tmpIP = inet_ntoa(*(struct in_addr *)server->h_addr_list[0]);
+	char *tmpIP = inet_ntoa(*(struct in_addr *)server->h_addr_list[0]);
 	cout  << tmpIP << endl;
 	status = inet_pton(AF_INET, tmpIP, (void*) &serverIP);
-  	if (status <= 0) return false;
-  	status = 0;
-  	//cout << "Server IP: " << serverIP << endl;
+	if (status <= 0) return false;
+	status = 0;
+	//cout << "Server IP: " << serverIP << endl;
 	/*
 	Populate the server address and the port 
 	*/
@@ -100,15 +134,15 @@ bool fetchUrlData(string request, string& response) {
 	Connect to the server IP
 	*/
 	status = connect(serverSock, (struct sockaddr *) &servaddr, sizeof(servaddr));
-  	if (status < 0) {
-    	cerr << "Error opening host connection." << endl;
-    	return false;
-  	}
-  	SendMessage(serverSock, request, request.size());
+	if (status < 0) {
+		cerr << "Error opening host connection." << endl;
+		return false;
+	}
+	SendMessage(serverSock, request, request.size());
 
-  	ReadMessage(serverSock, response, MAX_LINE, true);
+	ReadMessage(serverSock, response, MAX_LINE, true);
 
-  	if ( close(serverSock) < 0 ) {
+	if ( close(serverSock) < 0 ) {
 		cerr << "PROXY-SERVER: Error calling close()" << endl;
 		exit(EXIT_FAILURE);
 	}
@@ -116,57 +150,75 @@ bool fetchUrlData(string request, string& response) {
 		cout << "Closed connection with server successfully !!!!" << endl;
 	}
 
-  	return true;
+	return true;
 }
+
 
 void* clientThread(void* args_p){
 
   // Local Variables
+
+	time_t request_time;
+   	time(&request_time);
 	threadArgs* tmp = (threadArgs*) args_p;
 	int conn_s = tmp -> clientSock;
 	delete tmp;
 	int sent_msg_size;
 	vector<string> request_params;
-	time_t rawtime;
   // Detach Thread to ensure that resources are deallocated on return.
 	pthread_detach(pthread_self());
 
 	string request;
 	/*  Retrieve an input line from the connected socket
-	    then simply write it back to the same socket.     */
+		then simply write it back to the same socket.     */
 	ReadMessage(conn_s, request, MAX_LINE-1, false);
 	
 	cout << "Browser Message: " << endl << request << endl;
 	request_params = split_string(request, ' ');
+	string host, type, uri, key;
+	getServerName(request, host);
+	getRequestType(request, type);
+	getURL(request, uri);
+	key = host+type+uri;
 	if(request_params.size() > 0) {
 
 		cout << "Fetching data....." << endl;
 
 		string response;
-		if(!fetchUrlData(request, response)) {
-			cerr << "Error fetching data from URL! " << endl;
-			//return;
+		pthread_mutex_lock(&cacheLock);
+		if (cache.check_cache(key)) {
+			response = cache.get_value(key);
+			cache.update_cache(key, request_time);
 		}
+		else {
+			if(!fetchUrlData(request, response)) {
+				cerr << "Error fetching data from URL! " << endl;
+				//return;
+			}
+			cache.insert(key, response, request_time);
+		}
+		pthread_mutex_unlock(&cacheLock);
+		
 		//cout << response << endl;
 		/*
 		stringstream ss;
 		ss << "HTTP/1.0 200 OK\n";
-      	ss << "Date: " << ctime(&rawtime);
-      	ss << "Server: CSS2\n";
-      	ss << "Connection: Closed\n";
-      	ss << "Content-Type: text/html\n";
-      	ss << "\n";
-      	ss << "<!DOCTYPE html>";
-      	ss << "<html>\n";
-      	ss << "<body>Hello World !!!!</body>\n";
-      	ss << "</html>";
+		ss << "Date: " << ctime(&rawtime);
+		ss << "Server: CSS2\n";
+		ss << "Connection: Closed\n";
+		ss << "Content-Type: text/html\n";
+		ss << "\n";
+		ss << "<!DOCTYPE html>";
+		ss << "<html>\n";
+		ss << "<body>Hello World !!!!</body>\n";
+		ss << "</html>";
 		cout << "Sending message......" << endl;
 		cout << ss.str() << endl;
 		*/
 
 
 		try {
-			sent_msg_size = SendMessage(conn_s, response, response.size());	
+			sent_msg_size = SendMessage(conn_s, response, response.size()); 
 			cout << "> " << sent_msg_size << endl;
 		} catch( ... ) {
 			cerr << "Browser Closed Connection! " << endl;
@@ -189,20 +241,19 @@ void* clientThread(void* args_p){
 	pthread_exit(NULL);
 }
 
-
 int main(int argc, char const *argv[])
 {
 	int       list_s;                /*  listening socket          */
-    int       conn_s;                /*  connection socket         */
+	int       conn_s;                /*  connection socket         */
 	unsigned int  cli_len;
-    short int port;                  /*  port number               */
-    struct    sockaddr_in servaddr;  /*  socket address structure  */
+	short int port;                  /*  port number               */
+	struct    sockaddr_in servaddr;  /*  socket address structure  */
 	struct    sockaddr_in cli_addr;
-    char      buffer[MAX_LINE];      /*  character buffer          */
-    char     *endptr;                /*  for strtol()              */
+	char      buffer[MAX_LINE];      /*  character buffer          */
+	char     *endptr;                /*  for strtol()              */
 
 	/*  Get port number from the command line, and
-        set to default port if no arguments were supplied  */
+		set to default port if no arguments were supplied  */
 	if ( argc == 2 ) {
 		port = strtol(argv[1], &endptr, 0);
 		if ( *endptr ) {
@@ -220,21 +271,21 @@ int main(int argc, char const *argv[])
 		exit(EXIT_FAILURE);
 	}
 
-    /*  Create the listening socket  */
+	/*  Create the listening socket  */
 	if ( (list_s = socket(AF_INET, SOCK_STREAM,  IPPROTO_TCP)) < 0 ) {
 		//fprintf(stderr, "PROXY-SERVER: Error creating listening socket.\n");
 		cerr << "PROXY-SERVER: Error creating listening socket." << endl;
 		exit(EXIT_FAILURE);
 	}
 
-    /*  Set all bytes in socket address structure to
-        zero, and fill in the relevant data members   */
+	/*  Set all bytes in socket address structure to
+		zero, and fill in the relevant data members   */
 	memset(&servaddr, 0, sizeof(servaddr));
 	servaddr.sin_family      = AF_INET;
 	servaddr.sin_addr.s_addr = htonl(INADDR_ANY);
 	servaddr.sin_port        = htons(port);
 
-    /*  Bind our socket addresss to the 
+	/*  Bind our socket addresss to the 
 	listening socket, and call listen()  */
 
 	if ( bind(list_s, (struct sockaddr *) &servaddr, sizeof(servaddr)) < 0 ) {
@@ -249,8 +300,8 @@ int main(int argc, char const *argv[])
 		exit(EXIT_FAILURE);
 	}
 
-     /*  Enter an infinite loop to respond
-        to client requests and process them  */
+	 /*  Enter an infinite loop to respond
+		to client requests and process them  */
 
 	while ( 1 ) {
 		cli_len = sizeof(cli_addr);
@@ -273,7 +324,7 @@ int main(int argc, char const *argv[])
 		pthread_t tid;
 		int threadStatus = pthread_create(&tid, NULL, clientThread, (void*)args_p);
 		if (threadStatus != 0){
-      		// Failed to create child thread
+			// Failed to create child thread
 			cerr << "Failed to create child process." << endl;
 			close(conn_s);
 			pthread_exit(NULL);
