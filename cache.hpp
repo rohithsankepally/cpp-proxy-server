@@ -16,8 +16,10 @@ public:
 	Cache(long int size): MAX_SIZE(size) {}
 	Cache(): MAX_SIZE(1000) {}
 	K get_LRU();
-	void insert(K key, V val, T time);
-	bool check_cache(K key, V val, T t);
+	void insert(K key, V val, T t);
+	bool check_cache(K key);
+	bool update_cache(K key, T t);
+	V get_value(K key);
 	inline bool isFull() { return MAX_SIZE <= key_to_val.size();}
 	inline bool isEmpty() { return key_to_val.size() == 0;}
 	friend ostream& operator<<(ostream& os, const Cache<K, V, T>& cache)  {
@@ -38,7 +40,7 @@ private:
 
 template < typename K, typename V, typename T> 
 void Cache<K, V, T>::insert(K key, V val, T t) {
-
+	assert(check_cache(key) == false);
 	if(!isFull()) {
 		this->key_to_val.insert(make_pair(key, make_pair(t, val)));
 		this->key_time_list.push_back(key);
@@ -53,17 +55,28 @@ void Cache<K, V, T>::insert(K key, V val, T t) {
 }
 
 template < typename K, typename V, typename T> 
-bool Cache<K, V, T>::check_cache(K key, V val, T t) {
+bool Cache<K, V, T>::check_cache(K key) {
 	Key_Time_List_it it;
 	for (it = this->key_time_list.begin(); it != this->key_time_list.end() ; ++it) {
 		if(*it == key) {
 			this->key_time_list.erase(it);
 			this->key_time_list.push_back(key);
-			this->key_to_val[key].first = t;
+			//this->key_to_val[key].first = t;
 			return true; 
 		}
 	}
-	insert(key, val, t);
+	//insert(key, val, t);
 	return false;
 }
 
+template < typename K, typename V, typename T>
+V Cache<K, V, T>::get_value(K key) {
+	return this->key_to_val[key].second;
+}
+
+template < typename K, typename V, typename T> 
+bool Cache<K, V, T>::update_cache(K key, T t) {
+	assert(check_cache(key) == true);
+	this->key_to_val[key].first = t;
+	return true;
+}
